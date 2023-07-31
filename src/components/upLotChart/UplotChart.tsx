@@ -1,7 +1,11 @@
 import React, { useEffect, useRef, useState } from "react";
 import uPlot, { Options, AlignedData } from "uplot";
 
-// Helper function to convert the data to Typed Arrays
+interface Dataset {
+  data: { x: number; y: number }[];
+  color: string;
+}
+
 const prepareData = (data: { x: number; y: number }[]): AlignedData => {
   const xs = new Float64Array(data.length);
   const ys = new Float64Array(data.length);
@@ -14,99 +18,138 @@ const prepareData = (data: { x: number; y: number }[]): AlignedData => {
   return [xs, ys];
 };
 
-const UplotChart: React.FC = () => {
-  const chartRef = useRef<uPlot | null>(null);
+interface MultiPanelChartProps {
+  datasets: Dataset[];
+}
+
+const UplotChart: React.FC<MultiPanelChartProps> = ({ datasets }) => {
+  const chartRefs = useRef<uPlot[]>([]);
   const tooltipRef = useRef<HTMLDivElement>(null);
-  const [tooltipValue, setTooltipValue] = useState<{
-    left: number;
-    top: number;
-  } | null>(null);
-  const [cursorPosition, setCursorPosition] = useState<{
-    left: number;
-    top: number;
-  } | null>(null);
+  const tooltipRef2 = useRef<HTMLDivElement>(null);
+  const [tooltipValues, setTooltipValues] = useState<
+    { left: number; top: number }[]
+  >(datasets.map(() => ({ left: -10, top: -10 })));
 
-  const setCursorFn = (self: uPlot, cursor?: uPlot.Cursor) => {
+  let mooSync = uPlot.sync("moo")
+
+  const setCursorFn = (self: uPlot | any, cursor?: uPlot.Cursor) => {
     if (self && self.cursor.left != null && self.cursor.top != null) {
-      setCursorPosition({ left: self.cursor.left, top: self.cursor.top });
-
-      const seriesIdx = 0;
-      const valueLeft = self.posToVal(self.cursor.left, "x");
-      const valueTop = self.posToVal(self.cursor.top, "y");
-
-      if (self.data && self.data[seriesIdx]) {
-        setTooltipValue({ left: valueLeft, top: valueTop });
-      } else {
-        setTooltipValue(null);
-      }
+      const seriesValues: { left: number; top: number }[] = [];
+      datasets.forEach((_, seriesIdx) => {
+        const valueLeft = self.posToVal(self.cursor.left, "x");
+        const valueTop = self.posToVal(self.cursor.top, "y", seriesIdx);
+        seriesValues.push({ left: valueLeft ?? 0, top: valueTop ?? 0 });
+      });
+  
+      setTooltipValues(seriesValues);
     } else {
-      setCursorPosition(null); // Reset cursor position when it becomes undefined
+      setTooltipValues(datasets.map(() => ({ left: 0, top: 0 })));
     }
   };
 
+  const matchSyncKeys = (own: any, ext: any) => own === ext 
+const chartHeight = 400
   useEffect(() => {
-    const data = [
-      { x: 0, y: 10 },
-      { x: 1, y: 15 },
-      { x: 2, y: -25 },
-      { x: 3, y: -35 },
-      { x: 4, y: -40 },
-    ];
+    chartRefs.current = datasets.map((dataset) => {
+     
+      const opts: Options = {
+        width: 400,
+        height: chartHeight,
+        scales: {
+          x: { time: false },
+          y: { auto: true },
+        },
+        cursor: {
+          lock:true,
+          focus: {
+            prox: 16
+          },
+          sync: {
+            key: mooSync.key,
+            match: [matchSyncKeys, matchSyncKeys],
+          }
+        },
+        series: [
+          {},
+          {
+            stroke: "red",
+            fill: "rgba(255,0,0,0.1)",
+          },
+        ],
+        hooks: {
+          setCursor: [setCursorFn] as any,
+        },
+      };
 
-    const opts: Options = {
-      width: 1000,
-      height: 500,
-      scales: {
-        x: { time: false },
-        y: { auto: true },
-      },
-      series: [{}, {}],
-      hooks: {
-        setCursor: [setCursorFn] as any, // Use the type assertion for setCursor hook
-      },
-    };
+      const alignedData = prepareData(dataset.data);
 
-    const alignedData = prepareData(data);
+      const chart = new uPlot(
+        opts,
+        alignedData,
+        document.createElement("div")
+      ) as uPlot;
 
-    chartRef.current = new uPlot(
-      opts,
-      alignedData,
-      document.getElementById("uplot-chart") as HTMLElement
-    ) as uPlot;
+      document.getElementById("uplot-container")?.appendChild(chart.root);
+
+      return chart;
+    });
 
     return () => {
-      if (chartRef.current) {
-        chartRef.current.destroy();
-      }
+      chartRefs.current.forEach((chart) => {
+        if (chart) {
+          chart.destroy();
+        }
+      });
     };
-  }, []);
+  }, [datasets]);
 
   useEffect(() => {
-    if (tooltipValue && cursorPosition && tooltipRef.current) {
-      const { left, top } = tooltipValue;
-      const { left: positionLeft, top: positionTop } = cursorPosition;
-
-      console.log("tooltipValue", tooltipValue, cursorPosition)
-      if (positionLeft !== -10 && positionTop !== -10) {
-        tooltipRef.current.innerHTML = `X: ${left.toFixed(2)}, Y: ${top.toFixed(
-          2
-        )}`;
-        tooltipRef.current.style.display = "block";
-        tooltipRef.current.style.left = `${positionLeft}px`;
-        tooltipRef.current.style.top = `${positionTop - 30}px`;
-      } else {
-        tooltipRef.current.style.display = "none";
-      }
-    } else if (tooltipRef.current) {
-      tooltipRef.current.style.display = "none";
+    if (tooltipRef.current) {
+      tooltipRef.current.style.display = "block";
+      tooltipRef.current.style.left = `${tooltipValues[0].left}px`;
+      tooltipRef.current.style.top = `${tooltipValues[0].top - 30}px`;
+      tooltipRef.current.innerHTML = tooltipValues
+        .map(
+          (value, index) =>
+            `Dataset ${index + 1}: X: ${value.left.toFixed(
+              2
+            )}, Y: ${value.top.toFixed(2)}`
+        )
+        .join("<br/>");
     }
-  }, [cursorPosition, tooltipValue]);
+  }, [tooltipValues]);
+  useEffect(() => {
+    if (tooltipRef2.current) {
+      tooltipRef2.current.style.display = "block";
+      tooltipRef2.current.style.left = `${tooltipValues[0].left}px`;
+      tooltipRef2.current.style.top = `${tooltipValues[0].top + (chartHeight * 2)}px`;
+      tooltipRef2.current.innerHTML = tooltipValues
+        .map(
+          (value, index) =>
+            `Dataset ${index + 1}: X: ${value.left.toFixed(
+              2
+            )}, Y: ${value.top.toFixed(2)}`
+        )
+        .join("<br/>");
+    }
+  }, [tooltipValues]);
 
   return (
     <div style={{ position: "relative" }}>
-      <div id="uplot-chart"></div>
+      <div id="uplot-container"></div>
       <div
         ref={tooltipRef}
+        style={{
+          display: "none",
+          position: "absolute",
+          backgroundColor: "rgba(0, 0, 0, 0.8)",
+          color: "white",
+          padding: "5px",
+          borderRadius: "5px",
+        }}
+      ></div>
+      <div
+        ref={tooltipRef2}
         style={{
           display: "none",
           position: "absolute",
@@ -121,3 +164,4 @@ const UplotChart: React.FC = () => {
 };
 
 export default UplotChart;
+
